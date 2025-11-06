@@ -9,16 +9,17 @@
 use core::fmt::Debug;
 
 use rand_core::{
+    block::{BlockRng, CryptoGenerator, Generator},
     CryptoRng, RngCore, SeedableRng,
-    block::{BlockRng, BlockRngCore, CryptoBlockRng},
 };
 
 #[cfg(feature = "zeroize")]
 use zeroize::{Zeroize, ZeroizeOnDrop};
 
 use crate::{
-    ChaChaCore, R8, R12, R20, Rounds, backends,
+    backends,
     variants::{Legacy, Variant},
+    ChaChaCore, Rounds, R12, R20, R8,
 };
 
 use cfg_if::cfg_if;
@@ -145,35 +146,6 @@ pub type StreamId = U32x2;
 ///
 /// The arrays should be in little endian order.
 pub type BlockPos = U32x2;
-
-/// The results buffer that zeroizes on drop when the `zeroize` feature is enabled.
-#[derive(Clone)]
-pub struct BlockRngResults([u32; BUFFER_SIZE]);
-
-impl AsRef<[u32]> for BlockRngResults {
-    fn as_ref(&self) -> &[u32] {
-        &self.0
-    }
-}
-
-impl AsMut<[u32]> for BlockRngResults {
-    fn as_mut(&mut self) -> &mut [u32] {
-        &mut self.0
-    }
-}
-
-impl Default for BlockRngResults {
-    fn default() -> Self {
-        Self([0u32; BUFFER_SIZE])
-    }
-}
-
-#[cfg(feature = "zeroize")]
-impl Drop for BlockRngResults {
-    fn drop(&mut self) {
-        self.0.zeroize();
-    }
-}
 
 const BUFFER_SIZE: usize = 64;
 
@@ -334,7 +306,7 @@ macro_rules! impl_chacha_rng {
                 self.core.fill_bytes(dest)
             }
         }
-        impl CryptoBlockRng for $ChaChaXCore {}
+        impl CryptoGenerator for $ChaChaXCore {}
         impl CryptoRng for $ChaChaXRng {}
 
         #[cfg(feature = "zeroize")]
@@ -535,13 +507,17 @@ macro_rules! impl_chacha_rng {
             }
         }
 
-        impl BlockRngCore for $ChaChaXCore {
-            type Item = u32;
-            type Results = BlockRngResults;
+        impl Generator for $ChaChaXCore {
+            type Output = [u32; BUFFER_SIZE];
 
             #[inline]
-            fn generate(&mut self, r: &mut Self::Results) {
-                self.0.generate(&mut r.0);
+            fn generate(&mut self, r: &mut Self::Output) {
+                self.0.generate(r);
+            }
+
+            #[cfg(feature = "zeroize")]
+            fn drop(&mut self, output: &mut Self::Output) {
+                output.zeroize();
             }
         }
     };
@@ -936,8 +912,8 @@ pub(crate) mod tests {
     /// Because this test uses `rand_chacha v0.3.1` which uses a 64-bit counter, these
     /// test results should be accurate up to `block_pos = 2^32 - 1`.
     fn test_fill_bytes_v2() {
-        use rand_chacha::ChaCha20Rng as TesterRng;
         use rand_chacha::rand_core::{RngCore, SeedableRng};
+        use rand_chacha::ChaCha20Rng as TesterRng;
 
         let mut rng = ChaChaRng::from_seed([0u8; 32]);
         let mut tester_rng = TesterRng::from_seed([0u8; 32]);
